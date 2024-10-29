@@ -47,7 +47,7 @@ bool abort_request;
 void CtrlCHandler(int sig)
 {
         abort_request = true;
-        cout << "anceling..." << endl;
+        cout << "canceling..." << endl;
         signal(sig,SIG_IGN);  
 }
 
@@ -786,8 +786,10 @@ int main (int argc, char **argv)
                         params->setOutro("You must either provide --rates, --counts or --events (exclusivly). If option --rates is provided,\nthe option --reset is applied automatically.");
                         if (params->check()) 
                         {
-                                if (params->isSet(EVENTS)) jTDC (vme, VMEImage, baseaddress, params->get(EVENTS), params->get(TRIGGER), params->get(GEOID), params->get(RANGE), params->isSet(VERBOSE),params->isSet(VVERBOSE));
-                                else jScaler (vme, VMEImage, baseaddress, params->isSet(RATES), params->isSet(RESET), params->isSet(DUTY));
+                                if (params->isSet(EVENTS)) 
+                                        jTDC (vme, VMEImage, baseaddress, params->get(EVENTS), params->get(TRIGGER), params->get(GEOID), params->get(RANGE), params->isSet(VERBOSE),params->isSet(VVERBOSE));
+                                else 
+                                        jScaler (vme, VMEImage, baseaddress, params->isSet(RATES), params->isSet(RESET), params->isSet(DUTY));
                         }
                 break;
 

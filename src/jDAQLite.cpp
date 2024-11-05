@@ -16,8 +16,6 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.    
 */
 
-#include "vmelib/include/vmelib.h"
-
 #include <iostream>
 #include <map>
 #include <stdio.h>
@@ -30,11 +28,76 @@
 #include <signal.h>
 #include <termios.h>
 
+#include <stdint.h>
+#include <byteswap.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <ctype.h>
+
+#include <sys/types.h>
+#include <sys/mman.h>
+
 int NB_ENABLE = 1;
 int NB_DISABLE = 0;
 
 using namespace std;
 
+/* ltoh: little endian to host */
+/* htol: host to little endian */
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define ltohl(x)       (x)
+#define ltohs(x)       (x)
+#define htoll(x)       (x)
+#define htols(x)       (x)
+#elif __BYTE_ORDER == __BIG_ENDIAN
+#define ltohl(x)     __bswap_32(x)
+#define ltohs(x)     __bswap_16(x)
+#define htoll(x)     __bswap_32(x)
+#define htols(x)     __bswap_16(x)
+#endif
+
+ //* * * * * * * * * * * * * * * * * * * *//
+ //*   D E V I C E   F U N C T I O N S   *//
+ //* * * * * * * * * * * * * * * * * * * *//
+void dev_rl(int fd,off_t target,uint32_t *data){
+    void *map;
+    off_t pgsz, target_aligned, offset;
+
+    pgsz = sysconf(_SC_PAGESIZE);
+	offset = target & (pgsz - 1);
+	target_aligned = target & (~(pgsz - 1));
+
+    map = mmap(NULL, offset + 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+            target_aligned);
+	if (map == (void *)-1) {
+		printf("Memory 0x%lx mapped failed: %s.\n",
+			target, strerror(errno));
+	}
+
+    map += offset;
+
+    *data = *((uint32_t *) map);
+    /* swap 32-bit endianess if host is not little-endian */
+    *data = ltohl(*data);
+}
+
+void dev_wl(int fd,off_t target,uint32_t data){
+	void *map;
+    off_t pgsz, target_aligned, offset;
+
+    pgsz = sysconf(_SC_PAGESIZE);
+	offset = target & (pgsz - 1);
+	target_aligned = target & (~(pgsz - 1));
+
+    map = mmap(NULL, offset + 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+            target_aligned);
+
+    map += offset;
+    
+    data = htoll(data);
+	*((uint32_t *) map) = data;
+}
 
 
 
@@ -112,7 +175,7 @@ class parameterHandle {
                         string sLong;
                         string sDescription;
                         bool moredata;
-                        uint value;
+                        uint32_t value;
                         bool flag;
                         bool allowed;
                 };
@@ -125,7 +188,7 @@ class parameterHandle {
                 PNAME find(string);
                 bool hasMoredata(PNAME);
                 void storeValue(PNAME,string);
-                uint get(PNAME);
+                uint32_t get(PNAME);
                 void set(PNAME);
                 bool isSet(PNAME);
                 void allow(PNAME);
@@ -158,7 +221,7 @@ void parameterHandle::storeValue(PNAME p, string value) {
         }
 }
 
-uint parameterHandle::get(PNAME p) {
+uint32_t parameterHandle::get(PNAME p) {
         return dataset.at(p).value;        
 }
 
@@ -247,27 +310,27 @@ bool parameterHandle::check ()
  //*   C O R E   F U N C T I O N S   *//
  //* * * * * * * * * * * * * * * * * *//
 
-void jScaler (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool reset, bool dutycycle)
+void jScaler (int fd, uint32_t baseaddress, bool rate, bool reset, bool dutycycle)
 {
         cout << "Initializing module for SCALER readout ... " << endl << endl;
         
-        uint counter_reset = 2;
-        uint counter_latch = 4; 
+        uint32_t counter_reset = 2;
+        uint32_t counter_latch = 4; 
                                         
-        uint clockregister = 0x0044;
-        uint counterbase = 0x4000;
+        uint32_t clockregister = 0x0044;
+        uint32_t counterbase = 0x4000;
 
-        uint clockfreq = 200;
+        uint32_t clockfreq = 200;
         
         //set config register
-        uint config_register = 0;
+        uint32_t config_register = 0;
         if (dutycycle) config_register = 1 << 5;
-        vme->wl(VMEImage,baseaddress +0x0020,config_register); 
+        dev_wl(fd,baseaddress +0x0020,config_register); 
 
         //reset all counters for start
-        vme->wl(VMEImage,baseaddress +0x0024,counter_reset); 
+        dev_wl(fd,baseaddress +0x0024,counter_reset); 
         //disable external latch
-        vme->wl(VMEImage,baseaddress +0x0028,0x70000000); 
+        dev_wl(fd,baseaddress +0x0028,0x70000000); 
 
 
         //If we are in rate mode, we need to reset, otherwise it will do stupid things on overflow
@@ -280,19 +343,19 @@ void jScaler (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool re
         while (keeprunning)
         {
 
-                if (reset) vme->wl(VMEImage,baseaddress +0x0024,counter_latch+counter_reset);
-                else vme->wl(VMEImage,baseaddress +0x0024,counter_latch);
+                if (reset) dev_wl(fd,baseaddress +0x0024,counter_latch+counter_reset);
+                else dev_wl(fd,baseaddress +0x0024,counter_latch);
 
                 printf(" Module: jTDC\n\n");
 
                 //step 1: read out all counters
-                uint clk = 0;
-                uint scaler[98];
+                uint32_t clk = 0;
+                uint32_t scaler[98];
         
-                vme->rl(VMEImage,baseaddress + clockregister,&clk); 
+                dev_rl(fd,baseaddress + clockregister,&clk); 
                 
-                for (uint counter=0;counter<98;counter+=1) {
-                                vme->rl(VMEImage,baseaddress + counterbase + 4*counter,&scaler[counter]); 
+                for (uint32_t counter=0;counter<98;counter+=1) {
+                                dev_rl(fd,baseaddress + counterbase + 4*counter,&scaler[counter]); 
                 }
 
                 //step 2: print scaler values
@@ -309,7 +372,7 @@ void jScaler (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool re
                 cout << "--------------------------              --------------------------              --------------------------"  << endl;
 
 
-                for (uint counter=1;counter<33;counter+=1)
+                for (uint32_t counter=1;counter<33;counter+=1)
                 {                       
 
                                 if (rate == true) {
@@ -344,7 +407,7 @@ void jScaler (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool re
                         
                         if (c=='r') 
                         {
-                                vme->wl(VMEImage,baseaddress +0x0024,counter_reset); 
+                                dev_wl(fd,baseaddress +0x0024,counter_reset); 
                                 cout << " -> Reset Counters";
                         }
                         cout << endl << endl;                       
@@ -360,17 +423,17 @@ void jScaler (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool re
 
 
 
-void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool reset, bool init, bool dutycycle)
+void jDisc (int fd, uint32_t baseaddress, bool rate, bool reset, bool init, bool dutycycle)
 {
         cout << "Initializing module for SCALER and VOLTAGE readout ... " << endl << endl;
         
-        uint counter_reset = 2;
-        uint counter_latch = 4; 
+        uint32_t counter_reset = 2;
+        uint32_t counter_latch = 4; 
                                         
-        uint clockregister = 0x0044;
-        uint counterbase = 0x4000;
-        uint discbase = 0xA000;
-        uint clockfreq = 200;
+        uint32_t clockregister = 0x0044;
+        uint32_t counterbase = 0x4000;
+        uint32_t discbase = 0xA000;
+        uint32_t clockfreq = 200;
         
         if (dutycycle) {
             reset = true;
@@ -378,26 +441,26 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
         
         if (init) {
                 //reset DAQs and HYSTH
-                vme->wl(VMEImage,baseaddress + discbase + 0x004,0x1); //MEZA +0
-                vme->wl(VMEImage,baseaddress + discbase + 0x044,0x1); //MEZB +40
-                vme->wl(VMEImage,baseaddress + discbase + 0x084,0x1); //MEZC +80
+                dev_wl(fd,baseaddress + discbase + 0x004,0x1); //MEZA +0
+                dev_wl(fd,baseaddress + discbase + 0x044,0x1); //MEZB +40
+                dev_wl(fd,baseaddress + discbase + 0x084,0x1); //MEZC +80
 
                 usleep(200);
                 //reset THRESH
-                vme->wl(VMEImage,baseaddress + discbase + 0x010,0x7000);
-                vme->wl(VMEImage,baseaddress + discbase + 0x050,0x7000);
-                vme->wl(VMEImage,baseaddress + discbase + 0x090,0x7000);
+                dev_wl(fd,baseaddress + discbase + 0x010,0x7000);
+                dev_wl(fd,baseaddress + discbase + 0x050,0x7000);
+                dev_wl(fd,baseaddress + discbase + 0x090,0x7000);
           
                 //set config register
-                uint config_register = 0;
+                uint32_t config_register = 0;
                 if (dutycycle) config_register = 1 << 5;
-                vme->wl(VMEImage,baseaddress +0x0020,config_register); 
+                dev_wl(fd,baseaddress +0x0020,config_register); 
         }
 
         //reset all counters for start
-        vme->wl(VMEImage,baseaddress +0x0024,counter_reset); 
+        dev_wl(fd,baseaddress +0x0024,counter_reset); 
         //disable external latch
-        vme->wl(VMEImage,baseaddress +0x0028,0x70000000); 
+        dev_wl(fd,baseaddress +0x0028,0x70000000); 
                 
         //If we are in rate mode, we need to reset, otherwise it will do stupid things on overflow
         if (rate == true) reset = true;
@@ -409,24 +472,24 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
         while (keeprunning)
         {
 
-                if (reset) vme->wl(VMEImage,baseaddress +0x0024,counter_latch+counter_reset); 
-                else vme->wl(VMEImage,baseaddress +0x0024,counter_latch);
+                if (reset) dev_wl(fd,baseaddress +0x0024,counter_latch+counter_reset); 
+                else dev_wl(fd,baseaddress +0x0024,counter_latch);
 
                 cout << " Module: jDisc" << endl << endl;
 
                 //step 1: read out all counters
-                uint clk = 0;
-                uint scaler[50];
-                uint threshs[48];
+                uint32_t clk = 0;
+                uint32_t scaler[50];
+                uint32_t threshs[48];
         
-                vme->rl(VMEImage,baseaddress + clockregister,&clk); 
+                dev_rl(fd,baseaddress + clockregister,&clk); 
                 
-                for (uint counter=0;counter<50;counter+=1) {
-                                vme->rl(VMEImage,baseaddress + counterbase + 4*counter,&scaler[counter]); 
+                for (uint32_t counter=0;counter<50;counter+=1) {
+                                dev_rl(fd,baseaddress + counterbase + 4*counter,&scaler[counter]); 
                 }
 
-                for (uint counter=0;counter<48;counter+=1) {
-                        vme->rl(VMEImage,baseaddress + discbase + 0x100 + 4*counter,&threshs[counter]); 
+                for (uint32_t counter=0;counter<48;counter+=1) {
+                        dev_rl(fd,baseaddress + discbase + 0x100 + 4*counter,&threshs[counter]); 
                 }
                 
                 
@@ -444,7 +507,7 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
                 cout << "    --------------------------               --------------------------               --------------------------"  << endl;
 
                 //print scaler
-                for (uint counter=1;counter<17;counter+=1)
+                for (uint32_t counter=1;counter<17;counter+=1)
                 {                       
                                 if (rate == true) {
                                         printf("        %2u    |  %9.0f Hz                    %2u    |  %9.0f Hz                    %2u    |  %9.0f Hz \n", counter, (scaler[counter]*1E9/(1000.*clk/clockfreq)), counter+16, (scaler[counter+16]*1E9/(1000.*clk/clockfreq)),  counter+32,  (scaler[counter+32]*1E9/(1000.*clk/clockfreq)));
@@ -466,7 +529,7 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
                 cout << "    -----------------------------------      -----------------------------------      -----------------------------------"  << endl;
 
                 //print voltages
-                for (uint counter=0;counter<16;counter+=1)
+                for (uint32_t counter=0;counter<16;counter+=1)
                 {                       
                                 printf("        %2u    |  %8.5f (%8.5f)             %2u    |  %8.5f (%8.5f)             %2u    |  %8.5f (%8.5f) \n", counter, voltage_from_adc_value(threshs[counter] & 0xffff),voltage_from_adc_value((threshs[counter]>>16) & 0xffff), counter+16, voltage_from_adc_value(threshs[counter+16] & 0xffff), voltage_from_adc_value((threshs[counter+16]>>16) & 0xffff),  counter+32,  voltage_from_adc_value(threshs[counter+32] & 0xffff), voltage_from_adc_value((threshs[counter+32]>>16) & 0xffff));
                 }               
@@ -474,15 +537,15 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
 
 
                 //read offset, ref and GND
-               uint offset_A[5];
-               uint offset_B[5];
-               uint offset_C[5];
+               uint32_t offset_A[5];
+               uint32_t offset_B[5];
+               uint32_t offset_C[5];
 
-                for (uint counter=0;counter<5;counter+=1)
+                for (uint32_t counter=0;counter<5;counter+=1)
                 {                       
-                        vme->rl(VMEImage,baseaddress + discbase + 0x200 + 4*counter,&offset_A[counter]); 
-                        vme->rl(VMEImage,baseaddress + discbase + 0x240 + 4*counter,&offset_B[counter]); 
-                        vme->rl(VMEImage,baseaddress + discbase + 0x280 + 4*counter,&offset_C[counter]); 
+                        dev_rl(fd,baseaddress + discbase + 0x200 + 4*counter,&offset_A[counter]); 
+                        dev_rl(fd,baseaddress + discbase + 0x240 + 4*counter,&offset_B[counter]); 
+                        dev_rl(fd,baseaddress + discbase + 0x280 + 4*counter,&offset_C[counter]); 
                 }               
 
                 //print Offset, Ref and GND
@@ -514,7 +577,7 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
                         
                         if (c=='r') 
                         {
-                                vme->wl(VMEImage,baseaddress +0x0024,counter_reset); 
+                                dev_wl(fd,baseaddress +0x0024,counter_reset); 
                                 cout << " -> Reset Counters";
                         }
                         cout << endl << endl;                       
@@ -527,11 +590,11 @@ void jDisc (VMEBridge* vme, int VMEImage, uint baseaddress, bool rate, bool rese
 
 
 
-void jTDC (VMEBridge* vme, int VMEImage, uint baseaddress, uint maxevents, uint triggerselect, uint geoid, uint range, bool verbose, bool vverbose)
+void jTDC (int fd, uint32_t baseaddress, uint32_t maxevents, uint32_t triggerselect, uint32_t geoid, uint32_t range, bool verbose, bool vverbose)
 {
         
         //bits of config register
-        uint tdc_reset = 1;
+        uint32_t tdc_reset = 1;
 
         //default values
         if (range == 0) range = 254;
@@ -540,31 +603,44 @@ void jTDC (VMEBridge* vme, int VMEImage, uint baseaddress, uint maxevents, uint 
         cout << "Initializing module for TDC readout ... ";                                 
 
         //memory map
-        uintptr_t FPGAbase = vme->getPciBaseAddr(VMEImage);
-        volatile uint *mEventfifo = (uint*) (FPGAbase + 0x8888);
-        volatile uint *mDatafifo = (uint*) (FPGAbase + 0x4444);
+        void *event_map,*data_map;
+        off_t pgsz, event_target_aligned, event_offset,data_target_aligned, data_offset;
+        pgsz = sysconf(_SC_PAGESIZE);
+        event_offset = 0x8888 & (pgsz - 1);
+        data_offset  = 0x4444 & (pgsz - 1);
+        event_target_aligned = 0x8888 & (~(pgsz - 1));
+        data_target_aligned  = 0x4444 & (~(pgsz - 1));
+        event_map = mmap(NULL, event_offset + 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                event_target_aligned);
+        data_map =  mmap(NULL,  data_offset + 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                data_target_aligned);
+        event_map += event_offset;
+        data_map  += data_offset;
+        volatile uint32_t *mEventfifo = ((uint32_t *) event_map);
+        volatile uint32_t *mDatafifo = ((uint32_t *) data_map);
+
         
 
         //set jTDC config as desired by user
-        uint current_settings;
-        vme->rl(VMEImage,baseaddress + 0x0020,&current_settings); 
-        vme->wl(VMEImage,baseaddress +0x0020, (current_settings & 0x60) | ((range << 8) + ((triggerselect & 0x1) << 7) + (geoid & 0x1F))); 
+        uint32_t current_settings;
+        dev_rl(fd,baseaddress + 0x0020,&current_settings); 
+        dev_wl(fd,baseaddress +0x0020, (current_settings & 0x60) | ((range << 8) + ((triggerselect & 0x1) << 7) + (geoid & 0x1F))); 
         
 
         //enable all channels
-        vme->wl(VMEImage,baseaddress + 0x2000, 0xFFFFFFFF); 
-        vme->wl(VMEImage,baseaddress + 0x2004, 0xFFFFFFFF); 
-        vme->wl(VMEImage,baseaddress + 0x2008, 0xFFFFFFFF); 
+        dev_wl(fd,baseaddress + 0x2000, 0xFFFFFFFF); 
+        dev_wl(fd,baseaddress + 0x2004, 0xFFFFFFFF); 
+        dev_wl(fd,baseaddress + 0x2008, 0xFFFFFFFF); 
 
 
         //read out jTDC properties
-        uint info;
-        vme->rl(VMEImage,baseaddress +0x0024,&info); 
+        uint32_t info;
+        dev_rl(fd,baseaddress +0x0024,&info); 
 
 
-        uint channels;
-        uint bits;
-        uint fw;
+        uint32_t channels;
+        uint32_t bits;
+        uint32_t fw;
         
         channels = (info >> 24) & 255;
         bits = (info >> 16) & 255;
@@ -591,15 +667,15 @@ void jTDC (VMEBridge* vme, int VMEImage, uint baseaddress, uint maxevents, uint 
         printf("max event %d\n\n",maxevents);
 
         //read out TDC
-        vme->wl(VMEImage,baseaddress +0x0024,tdc_reset); 
+        dev_wl(fd,baseaddress +0x0024,tdc_reset); 
 
         ofstream datfile;
         datfile.open (fname, ios::out | ios::trunc | ios::binary);
 
-        for(uint eventcounter=1; eventcounter<=maxevents;eventcounter++)
+        for(uint32_t eventcounter=1; eventcounter<=maxevents;eventcounter++)
         {               
                 //wait for an event in eventfifo
-                uint eventfifo = 0xdeadbeef;
+                uint32_t eventfifo = 0xdeadbeef;
                 do {
                         eventfifo = *mEventfifo;
                         usleep(1); //somehow it doesnot react on ^C, if this is not in here
@@ -615,14 +691,14 @@ void jTDC (VMEBridge* vme, int VMEImage, uint baseaddress, uint maxevents, uint 
                 datfile.write(eventbuffer,4);
 
                 //look into eventfifo value
-                uint entries_found_in_eventfifo = (eventfifo & 0x1fff);
-                uint eventnumber_found_in_eventfifo = ((eventfifo >> 16) & 0xffff);
+                uint32_t entries_found_in_eventfifo = (eventfifo & 0x1fff);
+                uint32_t eventnumber_found_in_eventfifo = ((eventfifo >> 16) & 0xffff);
                 if (verbose) printf("[%3d%%] Eventnumber %d has %d entries.\n", ((eventcounter*100)/maxevents), eventnumber_found_in_eventfifo, 2*entries_found_in_eventfifo);
 
                 //read out all data words from this event
-                for (uint entries = 0; entries<entries_found_in_eventfifo && !abort_request; entries++) 
+                for (uint32_t entries = 0; entries<entries_found_in_eventfifo && !abort_request; entries++) 
                 {
-                        uint datafifo = *mDatafifo;
+                        uint32_t datafifo = *mDatafifo;
                         //force litte endian, because that is the endian-ness of the two 16bit words in one 32bit word generated by the FPGA
                         //http://stackoverflow.com/a/13995796
                         char databuffer[4];
@@ -679,7 +755,7 @@ int main (int argc, char **argv)
         
         
         //We need at least a baseaddress
-        uint baseaddress = 0;
+        uint32_t baseaddress = 0;
         if(argc > 1) {
                 baseaddress = strtoul(argv[1],NULL,0);
                 sprintf(argv[1]," "); //so we can pass argv on the subclass
@@ -692,18 +768,17 @@ int main (int argc, char **argv)
 
         
         //Check firmware at given baseaddress
-        cout << "Checking FPGA firmware at address 0x" << hex << baseaddress << dec << " ... ";
-        VMEBridge* vme = new VMEBridge();
-        int VMEImage = vme->getImage(baseaddress,0x00010000,A32,D32,MASTER);
-
-        if (VMEImage==-1) {
-                cout << endl << "It was not possible to access the VME interface, did you ssh into the VME CPU?" << endl << endl;
-                exit(1);
+        int fd;
+        if ((fd = open("/dev/xdma0_user", O_RDWR | O_SYNC)) == -1) {
+            printf("character device %s opened failed: %s.\n",
+                argv[1], strerror(errno));
+            return -errno;
         }
+        printf("character device %s opened.\n", "/dev/xdma0_user");
         
-        uint version = 0;
-        uint moduleid = 0;
-        vme->rl(VMEImage,baseaddress + 0x0024,&version); 
+        uint32_t version = 0;
+        uint32_t moduleid = 0;
+        dev_rl(fd,baseaddress + 0x0024,&version); 
         moduleid = (version >> 8) & 255;
         version = version & 255;
 
@@ -757,7 +832,7 @@ int main (int argc, char **argv)
        
        
        //Check exlusivnes - globally valid
-       uint exclusiv = 0;
+       uint32_t exclusiv = 0;
        if (params->isSet(DUTY)) exclusiv++;
        if (params->isSet(RATES)) exclusiv++;
        if (params->isSet(COUNTS)) exclusiv++;
@@ -787,9 +862,9 @@ int main (int argc, char **argv)
                         if (params->check()) 
                         {
                                 if (params->isSet(EVENTS)) 
-                                        jTDC (vme, VMEImage, baseaddress, params->get(EVENTS), params->get(TRIGGER), params->get(GEOID), params->get(RANGE), params->isSet(VERBOSE),params->isSet(VVERBOSE));
+                                        jTDC (fd, baseaddress, params->get(EVENTS), params->get(TRIGGER), params->get(GEOID), params->get(RANGE), params->isSet(VERBOSE),params->isSet(VVERBOSE));
                                 else 
-                                        jScaler (vme, VMEImage, baseaddress, params->isSet(RATES), params->isSet(RESET), params->isSet(DUTY));
+                                        jScaler (fd, baseaddress, params->isSet(RATES), params->isSet(RESET), params->isSet(DUTY));
                         }
                 break;
 
@@ -809,8 +884,8 @@ int main (int argc, char **argv)
                         params->setOutro("You must either provide --rates, --counts or --events (exclusivly). If option --rates is provided,\nthe option --reset is applied automatically.");
                         if (params->check()) 
                         {
-                                if (params->isSet(EVENTS)) jTDC (vme, VMEImage, baseaddress, params->get(EVENTS), params->get(TRIGGER), params->get(GEOID), params->get(RANGE), params->isSet(VERBOSE),params->isSet(VVERBOSE));
-                                else jDisc (vme, VMEImage, baseaddress, params->isSet(RATES), params->isSet(RESET), params->isSet(INIT), params->isSet(DUTY));
+                                if (params->isSet(EVENTS)) jTDC (fd, baseaddress, params->get(EVENTS), params->get(TRIGGER), params->get(GEOID), params->get(RANGE), params->isSet(VERBOSE),params->isSet(VVERBOSE));
+                                else jDisc (fd, baseaddress, params->isSet(RATES), params->isSet(RESET), params->isSet(INIT), params->isSet(DUTY));
                         }
                 break;
 

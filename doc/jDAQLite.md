@@ -12,3 +12,17 @@
 3. enable all channels
 4. read out jTDC properties
 5. read out TDC with ```ofstream datfile```
+
+# Procedure of ```reg_rw()```
+1. calculate memory page aligned address and offset
+2. open device
+3. map device register in memory
+
+# Procudre of ```int main() (PCIe)```
+1. open device
+2. set base address.
+3. check firmware at given baseaddress.(0x24:{moduleid[7:0],version[7:0]});
+4. define and get all possible parameters
+5. check dependencies
+6. check exlusivnes
+7. evaluate parameters

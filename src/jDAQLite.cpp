@@ -1,6 +1,7 @@
 /*
-    jDAQLite, simple user interface to read out jTDC modules
+    jDAQLite, simple user interface to read out jTDC_PCIe modules
     Copyright (C) 2014 John Bieling <john.bieling@uni-bonn.de>
+    Copyright (C) 2024 Chen Riguang <    870408605@qq.com    >
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -745,6 +746,7 @@ int main (int argc, char **argv)
 
         std::cout << endl;
         std::cout << "jDAQLite  Copyright (C) 2014   John Bieling (john.bieling@uni-bonn.de)" << std::endl;
+        std::cout << "jDAQLite  Copyright (C) 2024   Chen Riguang (870408605@qq.com)" << std::endl;
         std::cout << endl;
         std::cout << "This program comes with ABSOLUTELY NO WARRANTY." << std::endl;
         std::cout << "This is free software, and you are welcome to redistribute it" << std::endl;

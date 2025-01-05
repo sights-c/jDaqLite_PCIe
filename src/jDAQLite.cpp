@@ -321,7 +321,7 @@ void jScaler (int fd, uint32_t baseaddress, bool rate, bool reset, bool dutycycl
         uint32_t clockregister = 0x0044;
         uint32_t counterbase = 0x4000;
 
-        uint32_t clockfreq = 200;
+        uint32_t clockfreq = 250;
         
         //set config register
         uint32_t config_register = 0;
